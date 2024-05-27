@@ -359,7 +359,7 @@ def get_observationsInf(graph):
             neighId = nid_idx[nlink]
             if i != neighId:
                 all_edges.append((i, neighId))
-                #all_edges.append((neighId, i))
+                all_edges.append((neighId, i))
 
     initial_node_representation = torch.stack(initial_node_representation, dim=0)# .to(device)
     
@@ -493,6 +493,7 @@ def get_observations(graph):
             neighId = nid_idx[nlink['id']]
             if i != neighId:
                 all_edges.append((i, neighId))
+                all_edges.append((neighId, i))
 
     initial_node_representation = torch.stack(initial_node_representation, dim=0)# .to(device)
     

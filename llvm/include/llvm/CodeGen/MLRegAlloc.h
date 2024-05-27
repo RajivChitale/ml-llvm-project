@@ -1,5 +1,6 @@
 #ifndef LLVM_LIB_CODEGEN_MLREGALLOC_H
 #define LLVM_LIB_CODEGEN_MLREGALLOC_H
+#define DEBUG_TYPE "regalloc"
 
 #include "AllocationOrder.h"
 #include "InterferenceCache.h"
@@ -280,8 +281,10 @@ private:
             
   Observation split_node_step(unsigned action) override;
   void initPipeCommunication();
+  void initPipeCommunicationTraining();
   void processMLInputs(SmallSetVector<unsigned, 8> *updatedRegIdxs, bool IsStart = false, bool IsJson=false);
   void processMLInputsProtobuf(SmallSetVector<unsigned, 8> *updatedRegIdxs, bool IsStart = false);
+  void processMLInputsTraining(SmallSetVector<unsigned, 8> *updatedRegIdxs, bool IsJson=false);
   void printFeatures();
   // void processMLAdvice();
 

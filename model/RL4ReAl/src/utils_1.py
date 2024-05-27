@@ -133,15 +133,25 @@ def log_subprocess_output(pipe):
 
 
 import time
-def startServer(filename, fun_name, fun_id, ip, build_path, cflags, logdir, worker_index=None, use_mca_reward=False):
+def startServer(filename, fun_name, fun_id, build_path, cflags, logdir, worker_index=None, use_mca_reward=False, ip=None, pipe_name=None, data_format=None, use_pipe=False, use_grpc=False):
     def run(filename, fun_id, build_path, cflags, logdir, worker_index, use_mca_reward):
         # cmd = "{clang} -O3 -mllvm -regalloc=greedy -march=core2 -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-server-address={ip} {src_file} -o /dev/null &> llvm_logs_1.log".format(clang=os.environ['CLANG'], src_file=filename, fun_id=fun_id, ip=ip)
         llvm_log = os.path.join(logdir, str(worker_index) + '_llvm_log.log')
-        if use_mca_reward:
-            cmd = "{build_path}/bin/clang++ -S -Xclang -load -Xclang {build_path}/lib/MCAInstrument.so -O3 -mllvm -ml-config-path={CONFIG_DIR} -mllvm -mca-funcID={fun_name} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-server-address={ip} {src_file} -o {logdir}/mca-out{worker_index}.s &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, ip=ip, worker_index=worker_index, logdir=logdir, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-        else:
-            cmd = "{build_path}/bin/clang++ -S -O3 -mllvm -ml-config-path={CONFIG_DIR} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-server-address={ip} {src_file} -o /dev/null &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, ip=ip, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        
+        if use_grpc:
+            if use_mca_reward:
+                cmd = "{build_path}/bin/clang++ -S -Xclang -load -Xclang {build_path}/lib/MCAInstrument.so -O3 -mllvm -ml-config-path={CONFIG_DIR} -mllvm -mca-funcID={fun_name} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-server-address={ip} {src_file} -o {logdir}/mca-out{worker_index}.s &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, ip=ip, worker_index=worker_index, logdir=logdir, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+            else:
+                cmd = "{build_path}/bin/clang++ -S -O3 -mllvm -ml-config-path={CONFIG_DIR} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-server-address={ip} {src_file} -o /dev/null &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, ip=ip, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        if use_pipe:
+            if use_mca_reward:
+                cmd = "{build_path}/bin/clang++ -S -Xclang -load -Xclang {build_path}/lib/MCAInstrument.so -O3 -mllvm -ml-config-path={CONFIG_DIR} -mllvm -mca-funcID={fun_name} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-pipe-name={pipe_name} -mllvm -mlra-data-format={data_format} -mllvm -mlra-use-pipe {src_file} -o {logdir}/mca-out{worker_index}.s &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, pipe_name=pipe_name, data_format=data_format, worker_index=worker_index, logdir=logdir, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+            else:
+                cmd = "{build_path}/bin/clang++ -S -O3 -mllvm -ml-config-path={CONFIG_DIR} {cflags} -mllvm -mlra-training -mllvm -debug-only=mlra-regalloc -mllvm -mlra-funcID={fun_id} -mllvm -mlra-pipe-name={pipe_name} -mllvm -mlra-data-format={data_format} -mllvm -mlra-use-pipe {src_file} -o /dev/null &> {llvm_log}".format(build_path=build_path, cflags=cflags, src_file=filename, fun_name=fun_name, fun_id=fun_id, pipe_name=pipe_name, data_format=data_format, llvm_log=llvm_log, CONFIG_DIR=CONFIG_DIR)# + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+            print("COMMAND", cmd, "\n")
+            
         #os.system(cmd)
+        print('-------------------------\nnear server start\n\n')
         pid = subprocess.Popen(cmd, executable='/bin/bash', shell=True, preexec_fn=os.setsid, stdout=subprocess.PIPE,
                                stdin=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, text=True, encoding='utf8')
         return pid

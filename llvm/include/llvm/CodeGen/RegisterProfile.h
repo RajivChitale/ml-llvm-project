@@ -15,7 +15,7 @@ struct RegisterProfile {
   SmallVector<float, 8> spillWeights;
   SmallVector<int, 8> useDistances;
   SmallSetVector<unsigned, 8> interferences;
-  SmallSetVector<unsigned, 8> frwdInterferences;
+  // SmallSetVector<unsigned, 8> frwdInterferences;
   SmallVector<IR2Vec::Vector, 12> vecRep;
   SmallVector<unsigned, 8> splitSlots;
   // SmallMapVector<unsigned, SmallVector<SlotIndex, 8>, 8> overlapsStart;

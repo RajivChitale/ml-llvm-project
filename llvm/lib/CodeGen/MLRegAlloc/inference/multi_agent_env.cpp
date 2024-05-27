@@ -8,6 +8,18 @@
 using namespace llvm;
 
 Observation& MultiAgentEnv::reset() {
+
+  for (auto rpi : regProfMap) {
+    auto id = rpi.first;
+    auto rp = rpi.second;
+    for (auto interference : rp.interferences) {
+      auto it = regProfMap.find(interference);
+      if (it != regProfMap.end()) {
+        regProfMap[interference].interferences.insert(id);
+      }
+    }
+  }
+
   // RegisterProfileMap regProfMapHelper_new;
   this->clearDataStructures();
   LLVM_DEBUG(errs() << "RegProgMap size at reset: " << this->regProfMapHelper.size()
@@ -17,7 +29,7 @@ Observation& MultiAgentEnv::reset() {
   for (auto &rpi : regProfMap) {
     auto rp = rpi.second;
     if (rp.cls == "Phy" &&
-        rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+        rp.interferences.begin() == rp.interferences.end()) {
       continue;
     }
     // errs() << "Adding node: " << rpi.first << "\n";
@@ -172,7 +184,7 @@ void MultiAgentEnv::update_env(RegisterProfileMap *regProfMapHelper,
   for (auto rpi : *regProfMapHelper) {
     RegisterProfile rp = rpi.second;
     if (rp.cls == "Phy" &&
-        rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+        rp.interferences.begin() == rp.interferences.end()) {
       if (std::find(updatedRegIdxs.begin(), updatedRegIdxs.end(), rpi.first) !=
           updatedRegIdxs.end()) {
         assert(false && "Skiping some imp node");
@@ -231,7 +243,7 @@ void MultiAgentEnv::update_env(RegisterProfileMap *regProfMapHelper,
   for (auto rpi : *regProfMapHelper) {
     RegisterProfile rp = rpi.second;
     if (rp.cls == "Phy" &&
-        rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+        rp.interferences.begin() == rp.interferences.end()) {
       continue;
     }
     if (this->regProfMapHelper.find(rpi.first) == this->regProfMapHelper.end()) {

@@ -69,6 +69,7 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
+#include "llvm/CodeGen/seedEmbedding_5500E_100D.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCContext.h"
@@ -199,9 +200,11 @@ MLRA::MLRA() {
   if (enable_dump_ig_dot || enable_mlra_inference || enable_mlra_training) {
     loadTargetRegisterConfig(MLConfig::mlconfig +
                              "/regalloc/RegColorMap_Both.json");
-    symbolic = new MIR2Vec_Symbolic(MLConfig::mlconfig +
-
-                                    "/ir2vec/seedEmbedding_5500E_100D.txt");
+    // symbolic = new MIR2Vec_Symbolic(MLConfig::mlconfig +
+    //                                 "/ir2vec/seedEmbedding_5500E_100D.txt");
+    symbolic = new MIR2Vec_Symbolic(vocabulary);
+    // symbolic = new MIR2Vec_Symbolic(MLConfig::mlconfig
+    // +"/ir2vec/aarch1b_seedEmbedding_10000E_100D.txt");
   }
   //???
   // SetStub<registerallocationinference::RegisterAllocationInference>(
@@ -355,7 +358,7 @@ void MLRA::processMLInputsProtobuf(SmallSetVector<unsigned, 8> *updatedRegIdxs,
 
     if (IsStart) {
       if (rp.cls == "Phy" &&
-          rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+          rp.interferences.begin() == rp.interferences.end()) {
         continue;
       }
     }
@@ -466,7 +469,7 @@ void MLRA::processMLInputs(SmallSetVector<unsigned, 8> *updatedRegIdxs,
 
     if (IsStart) {
       if (rp.cls == "Phy" &&
-          rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+          rp.interferences.begin() == rp.interferences.end()) {
         continue;
       }
     }
@@ -532,13 +535,95 @@ void MLRA::processMLInputs(SmallSetVector<unsigned, 8> *updatedRegIdxs,
   MLRunner->populateFeatures(result, newBool);
 }
 
+void MLRA::processMLInputsTraining(SmallSetVector<unsigned, 8> *updatedRegIdxs,
+                           bool IsJson) {
+  // errs() << "Inside processMLInputs\n";
+  // if (data_format == "protobuf") {
+  //   processMLInputsProtobuf(updatedRegIdxs, IsStart);
+  //   return;
+  // }
+  regIdxs.clear();
+
+  if (!updatedRegIdxs) {
+    for (auto rpm : regProfMap) {
+      regIdxs.insert(rpm.first);
+    }
+  } else
+    regIdxs = *updatedRegIdxs;
+
+  for (auto &reg : regIdxs) {
+    auto &rp = regProfMap[reg];
+
+    // errs() << reg << " " << rp.cls << " " << rp.color << " " <<
+    // rp.spillWeight
+    //        << " ";
+    // errs() << "[";
+    // for (auto &val : rp.useDistances) {
+    //   errs() << val << " ";
+    // }
+    // errs() << "]\n";
+
+    // if (IsStart) {                                                           // CONFIRM
+    //   if (rp.cls == "Phy" &&
+    //       rp.interferences.begin() == rp.interferences.end()) {
+    //     continue;
+    //   }
+    // }
+    // errs() << reg << " " << rp.cls << " " << rp.color << " " <<
+    // rp.spillWeight
+    //        << " ";
+    // errs() << "[";
+    // for (auto &val : rp.useDistances) {
+    //   errs() << val << " ";
+    // }
+    // errs() << "]\n";
+
+    std::string app = (IsJson ? "_" + std::to_string(reg) : "");
+    std::pair<std::string, int> regID("regID" + app, reg);
+
+    std::pair<std::string, std::vector<int>> interferences(
+        "interferences" + app,
+        std::vector<int>(rp.interferences.begin(), rp.interferences.end()));
+
+    std::pair<std::string, std::vector<int>> splitSlots(
+        "splitSlots" + app,
+        std::vector<int>(rp.splitSlots.begin(), rp.splitSlots.end()));
+
+    std::pair<std::string, std::vector<int>> useDistances(
+        "useDistances" + app,
+        std::vector<int>(rp.useDistances.begin(), rp.useDistances.end()));
+
+    std::pair<std::string, float> spillWeight("spillWeight" + app,
+                                              rp.spillWeight);
+    if (rp.spillWeight == INFINITY)
+      spillWeight.second = -1.0f;
+
+    std::pair<std::string, std::vector<float>> spillWeights(
+        "positionalSpillWeights" + app,
+        std::vector<float>(rp.spillWeights.begin(), rp.spillWeights.end()));
+
+    MLRunner->populateFeatures(regID, interferences, splitSlots, 
+                              useDistances, spillWeight, spillWeights);
+  }
+
+  // Add result, new bool variables in the Features vector
+  std::pair<std::string, int> result("result", 0);
+  if (regIdxs.size() > 0) {
+    numSplits++;
+    result.second = 1;
+  } else {
+    result.second = 0;
+  }
+  
+  MLRunner->populateFeatures(result);
+}
+
 void MLRA::serializeRegProfData(
     registerallocationinference::RegisterProfileList *response) {
   for (auto rpm : regProfMap) {
     // errs() << "serializing regprof -- " << rpm.first << "\n";
     auto rp = rpm.second;
-    if (rp.cls == "Phy" &&
-        rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+    if (rp.cls == "Phy" && rp.interferences.begin() == rp.interferences.end()) {
       // errs() << "Continuing here --- " << rpm.first << "-" << rp.cls << "\n";
 
       continue;
@@ -622,7 +707,7 @@ void MLRA::sendRegProfData(T *response,
     auto rp = regProfMap[reg];
     // Removing this check as there can be splits on regs that doesn't have any
     // interferences
-    // if (rp.frwdInterferences.begin() == rp.frwdInterferences.end())
+    // if (rp.interferences.begin() == rp.interferences.end())
     //   continue;
     errs() << reg << " " << rp.cls << " " << rp.color << " " << rp.spillWeight
            << " ";
@@ -631,7 +716,7 @@ void MLRA::sendRegProfData(T *response,
       errs() << val << " ";
     }
     errs() << "]\n";
-
+    
     auto regprofResponse = response->add_regprof();
     regprofResponse->set_regid(reg);
 
@@ -1322,8 +1407,8 @@ std::string MLRA::getDotGraphAsString() {
       }
     }
     std::string edges = "";
-    for (unsigned i = 0; i < rp.frwdInterferences.size(); ++i) {
-      auto interference = rp.frwdInterferences[i];
+    for (unsigned i = 0; i < rp.interferences.size(); ++i) {
+      auto interference = rp.interferences[i];
       edges = edges + std::to_string(id) + "--" + std::to_string(interference) +
               "\n";
     }
@@ -1684,7 +1769,6 @@ bool MLRA::captureRegisterProfile() {
     }
 
     SmallSetVector<unsigned, 8> interferences;
-    SmallSetVector<unsigned, 8> frwdInterferences;
     for (unsigned j = 0, ev = MRI->getNumVirtRegs(); j < ev; ++j) {
       unsigned Reg = Register::index2VirtReg(j);
       if (!isSafeVReg(Reg))
@@ -1705,14 +1789,12 @@ bool MLRA::captureRegisterProfile() {
         LLVM_DEBUG(errs() << "[" << MF->getName()
                           << "]Interference happened\n");
         interferences.insert(step + j);
-        frwdInterferences.insert(step + j);
       }
       LLVM_DEBUG(errs() << "\n");
     }
     // if (interferences.empty())
     //   continue;
     regProf.interferences = interferences;
-    regProf.frwdInterferences = frwdInterferences;
     regProfMap[i] = regProf;
   }
   LLVM_DEBUG(errs() << "Interference for physical register ended ...\n");
@@ -1721,6 +1803,7 @@ bool MLRA::captureRegisterProfile() {
    * Iterating over the virtual registers.
    *
    * */
+
   LLVM_DEBUG(errs() << "Interference for virtual register started ...\n");
   for (unsigned i = 0, e = MRI->getNumVirtRegs(); i < e; ++i) {
     RegisterProfile regProf;
@@ -1743,11 +1826,12 @@ bool MLRA::captureRegisterProfile() {
         regClassSupported4_MLRA.end()) {
       LLVM_DEBUG(errs() << "Register class(" << regProf.cls
                         << ") is not supported.\n");
-      numUnsupportedRegs++;
-      if (unsupportedClsFreq.find(regProf.cls) == unsupportedClsFreq.end())
-        unsupportedClsFreq[regProf.cls] = 1;
-      else
-        unsupportedClsFreq[regProf.cls] = unsupportedClsFreq[regProf.cls] + 1;
+      LLVM_DEBUG(numUnsupportedRegs++);
+      LLVM_DEBUG( 
+        if (unsupportedClsFreq.find(regProf.cls) == unsupportedClsFreq.end())
+          unsupportedClsFreq[regProf.cls] = 1;
+        else unsupportedClsFreq[regProf.cls] =
+          unsupportedClsFreq[regProf.cls] + 1);
       continue;
     }
 
@@ -1770,7 +1854,6 @@ bool MLRA::captureRegisterProfile() {
     regProf.splitSlots = splitPoints;
 
     SmallSetVector<unsigned, 8> interference;
-    SmallSetVector<unsigned, 8> frwdInterference;
     for (unsigned j = i + 1; j < MRI->getNumVirtRegs(); ++j) {
       unsigned Reg1 = Register::index2VirtReg(j);
       if (!isSafeVReg(Reg1))
@@ -1788,26 +1871,24 @@ bool MLRA::captureRegisterProfile() {
       auto Reg1Int = &LIS->getInterval(Reg1);
       if (VirtReg->overlaps(*Reg1Int)) {
         interference.insert(j + step);
-        frwdInterference.insert(j + step);
       }
     }
     regProf.interferences = interference;
-    regProf.frwdInterferences = frwdInterference;
     LLVM_DEBUG(errs() << "Adding reg here2: " << step + i << "\n");
     regProfMap[step + i] = regProf;
   }
 
-  // Adding interferences in other direction
-  for (auto rpi : regProfMap) {
-    auto id = rpi.first;
-    auto rp = rpi.second;
-    for (auto interference : rp.interferences) {
-      auto it = regProfMap.find(interference);
-      if (it != regProfMap.end()) {
-        regProfMap[interference].interferences.insert(id);
-      }
-    }
-  }
+  // Adding interferences in other direction - shifted to model side
+  // for (auto rpi : regProfMap) {
+  //   auto id = rpi.first;
+  //   auto rp = rpi.second;
+  //   for (auto interference : rp.interferences) {
+  //     auto it = regProfMap.find(interference);
+  //     if (it != regProfMap.end()) {
+  //       // regProfMap[interference].interferences.insert(id);
+  //     }
+  //   }
+  // }
 
   // LLVM_DEBUG(errs() << "Starting LastUseIdx search:\n");
   // for (auto rpi : regProfMap) {
@@ -1953,7 +2034,6 @@ void MLRA::updateRegisterProfileAfterSplit(
                           << "][after splitting]checkinterference true for "
                           << i << ", " << NewVRegIdx + step << "\n");
         rp.interferences.insert(i);
-        rp.frwdInterferences.insert(i);
         // if (regProfMap.find(i) == regProfMap.end()) {
 
         regProfMap[i].color = this->target_PhyReg2ColorMap[targetName][i];
@@ -1961,7 +2041,6 @@ void MLRA::updateRegisterProfileAfterSplit(
         regProfMap[i].cls = "Phy";
 
         regProfMap[i].interferences.insert(NewVRegIdx + step);
-        regProfMap[i].frwdInterferences.insert(NewVRegIdx + step);
         updatedRegs.insert(i);
         // }
       }
@@ -1997,10 +2076,8 @@ void MLRA::updateRegisterProfileAfterSplit(
       if (Reg1->overlaps(*Reg2)) {
         LLVM_DEBUG(errs() << "\n\t It overlaps\n");
         rp.interferences.insert(k + step);
-        rp.frwdInterferences.insert(k + step);
 
         regProfMap[k + step].interferences.insert(NewVRegIdx + step);
-        regProfMap[k + step].frwdInterferences.insert(NewVRegIdx + step);
       }
       updatedRegs.insert(k + step);
 
@@ -2042,11 +2119,9 @@ void MLRA::updateRegisterProfileAfterSplit(
       // if (regProfMap[interference].cls.equals("Phy")) {
       //   // if (Matrix->checkInterference(*NewVirtReg, interference)) {
       //   //   rp.interferences.insert(interference);
-      //   //   rp.frwdInterferences.insert(interference);
 
       //   //   regProfMap[interference].interferences.insert(NewVRegIdx +
       //   step);
-      //   //   regProfMap[interference].frwdInterferences.insert(NewVRegIdx +
       //   //   step);
 
       //   //   // regProfMap[interference].overlapsStart.erase(OldVRegIdx);
@@ -2073,17 +2148,14 @@ void MLRA::updateRegisterProfileAfterSplit(
       //   if (Reg1->overlaps(*Reg2)) {
       //     LLVM_DEBUG(errs() << "\n\t It overlaps\n");
       //     rp.interferences.insert(interference);
-      //     rp.frwdInterferences.insert(interference);
 
       //     regProfMap[interference].interferences.insert(NewVRegIdx + step);
-      //     regProfMap[interference].frwdInterferences.insert(NewVRegIdx +
       //     step);
 
       //     updatedRegs.insert(interference);
       //   }
       // }
       regProfMap[interference].interferences.remove(OldVRegIdx);
-      regProfMap[interference].frwdInterferences.remove(OldVRegIdx);
     }
 
     // There is a possibility that the new regs themselves interfere
@@ -2108,7 +2180,6 @@ void MLRA::updateRegisterProfileAfterSplit(
     //     LLVM_DEBUG(errs() << "\n\t It overlaps\n");
     //     unsigned otherNewVRegIdx = Register::virtReg2Index(ii);
     //     rp.interferences.insert(otherNewVRegIdx + step);
-    //     rp.frwdInterferences.insert(otherNewVRegIdx + step);
     //   }
     // }
 
@@ -2235,14 +2306,10 @@ void MLRA::allocatePhysRegsViaRL() {
       // errs() << "virtreg interferences:\n";
       // for (auto i : regProfMap[node_id].interferences)
       //   errs() << i << ", ";
-      // errs() << "\nvirtreg frwdInterferences:\n";
-      // for (auto i : regProfMap[node_id].frwdInterferences)
       //   errs() << i << ", ";
       // errs() << "\nphyreg Interferences:\n";
       // for (auto i : regProfMap[AvailablePhysReg].interferences)
       //   errs() << i << ", ";
-      // errs() << "\nphyreg frwdInterferences:\n";
-      // for (auto i : regProfMap[AvailablePhysReg].frwdInterferences)
       //   errs() << i << ", ";
       // errs() << "Matrix->checkInterference(*VirtReg, AvailablePhysReg)"
       //        << Matrix->checkInterference(*VirtReg, AvailablePhysReg) <<
@@ -2398,6 +2465,131 @@ void MLRA::training_flow() {
   LLVM_DEBUG(errs() << "Done MLRA allocation for : " << MF->getName() << '\n');
 }
 
+void MLRA::initPipeCommunicationTraining() {
+  auto processOutput = [&](std::vector<int> &reply) {
+    if (reply[0] == 0) {
+      PipeResponseData.Action = "Split";
+      PipeResponseData.RedIdx = reply[1];
+      PipeResponseData.PayLoad = reply[2];
+    } else if (reply[0] == 1) {
+      PipeResponseData.Action = "Color";
+      PipeResponseData.ColorMap.clear();
+      for (int i = 1; i < reply.size(); i = i + 2) {
+        PipeResponseData.ColorMap[std::to_string(reply[i])] = reply[i + 1];
+      }
+    } else if (reply[0] == -1) {
+      PipeResponseData.Action = "Exit";
+    }
+  };
+
+  bool IsJson = false;
+  if (data_format == "json") {
+    IsJson = true;
+  }
+
+  while (true) {
+    JO["new"] = false;
+    this->IsNew = false;
+  
+    // contact model (1)
+    errs() << "before handshake\n";
+    std::pair<std::string, int> handshake("handshake", 0);
+    MLRunner->populateFeatures(handshake);
+
+    size_t size;
+    int *out;
+    errs() << "Calling first evaluate\n";
+    // get request from model (2)
+    MLRunner->evaluate<int *>(out, size);
+    std::vector<int> reply(out, out + size);
+    errs() << "Reply:: ";
+    for (auto x : reply)
+      errs() << x << " ";
+    errs() << "\n";
+
+    processOutput(reply);
+    if (PipeResponseData.Action == "Color") {
+      errs() << "Received color from model\n";
+      
+      std::string ucf = "";
+      for (auto i : unsupportedClsFreq) {
+        LLVM_DEBUG(ucf += "\n " + i.first.str() + " - " + std::to_string(i.second));
+      }
+      if (PipeResponseData.ColorMap.size() == 0) {
+        errs() << "No color returned from model\n";
+        return;
+      }
+
+      for (auto it = PipeResponseData.ColorMap.begin();
+           it != PipeResponseData.ColorMap.end(); it++) {
+        errs() << "RegName: " << it->first << " color: " << it->second << "\n";
+      }
+
+      this->FunctionVirtRegToColorMap[MF->getName()] =
+          PipeResponseData.ColorMap;
+      allocatePhysRegsViaRL();
+
+      float moveCostAfter = countCopyAndMoveInstructions(*MF);
+      float movesCost = moveCostAfter - this->moveCostBefore;
+      float totalCost = computeAllocationCost(movesCost);
+      std::pair<std::string, float> cost("cost", totalCost);
+      MLRunner->populateFeatures(cost);
+      MLRunner->evaluate<int>();
+
+
+      errs() << "ALLOCATION DONE for " << MF->getName() << "\n";
+      errs() << "***************************************************\n";
+      return;
+    }
+    // write if action is Split
+    if (PipeResponseData.Action == "Split" ||
+        PipeResponseData.Action == "SplitAndCapture") {
+      unsigned splitRegIdx = PipeResponseData.RedIdx;
+      int splitPoint = PipeResponseData.PayLoad;
+      SmallVector<unsigned, 2> NewVRegs;
+
+      // errs() << "**************STARTING SPLITTING********************\n";
+      // errs() << "Splitting regidx: " << splitRegIdx << " at " << splitPoint
+      //        << "\n";
+
+      if (splitVirtReg(splitRegIdx, splitPoint, NewVRegs)) {
+        SmallSetVector<unsigned, 8> updatedRegIdxs;
+        updateRegisterProfileAfterSplit(splitRegIdx, NewVRegs, updatedRegIdxs);
+        if (enable_dump_ig_dot)
+          dumpInterferenceGraph(std::to_string(SplitCounter));
+        if (enable_mlra_checks)
+          verifyRegisterProfile();
+        // errs() << "Splitting done\n";
+        // errs() << "**********************************\n";
+        if (PipeResponseData.Action == "Split") {
+          errs() << "calling processMLInputs upon splitting...\n";
+          // response for model (3)
+          processMLInputsTraining(&updatedRegIdxs, IsJson);
+        } else
+          processMLInputsTraining(nullptr, IsJson);
+      } else {
+        // errs() << "ENTERED ELSE CASE!!!!!!!!!\n";
+        this->CommuResult = false;
+        // errs() << "Splitting failed\n";
+        std::pair<std::string, bool> result("result", 0);
+        MLRunner->populateFeatures(result);
+      }
+
+      MLRunner->evaluate<int>();
+
+    }
+    // TODO - confirm correctness, moved outside from the loop above
+    if (PipeResponseData.Action == "Exit") {
+      // splitting done for MF->getName()
+      // errs() << "Exit from model\n";
+      JO["exited"] = true;
+      return;
+    }
+  }
+}
+
+
+
 void MLRA::initPipeCommunication() {
   auto processOutput = [&](std::vector<int> &reply) {
     if (reply[0] == 0) {
@@ -2425,8 +2617,8 @@ void MLRA::initPipeCommunication() {
       this->IsNew = true;
       int count = 0;
       for (auto reg : regProfMap) {
-        if (reg.second.cls == "Phy" && reg.second.frwdInterferences.begin() ==
-                                           reg.second.frwdInterferences.end()) {
+        if (reg.second.cls == "Phy" && reg.second.interferences.begin() ==
+                                           reg.second.interferences.end()) {
           continue;
         }
         count++;
@@ -2434,7 +2626,7 @@ void MLRA::initPipeCommunication() {
       if (count < MIN_VARS || count > MAX_VARS) {
         errs() << "regProf size is not between 120 and 500\n";
         return;
-      }  
+      }
 
       for (auto it = MF->begin(); it != MF->end(); it++) {
         if (it->isEHFuncletEntry() || it->isEHPad() || it->isEHScopeEntry() ||
@@ -2468,7 +2660,7 @@ void MLRA::initPipeCommunication() {
       errs() << "Received color from model\n";
       std::string ucf = "";
       for (auto i : unsupportedClsFreq) {
-        ucf += "\n " + i.first.str() + " - " + std::to_string(i.second);
+        LLVM_DEBUG(ucf += "\n " + i.first.str() + " - " + std::to_string(i.second));
       }
       if (PipeResponseData.ColorMap.size() == 0) {
         errs() << "No color returned from model\n";
@@ -2533,6 +2725,7 @@ void MLRA::initPipeCommunication() {
   }
 }
 
+
 void MLRA::inference() {
   assert(enable_mlra_inference && "mlra-inference should be true.");
   assert(regProfMap.size() > 0 && "No profile information present.");
@@ -2581,8 +2774,8 @@ void MLRA::inference() {
   //   initPipeCommunication();
   //   return;
   // }
-  if (usePipe) {
-    std::string basename = "/tmp/" + mlra_pipe_name;  
+  if (usePipe && !enable_mlra_training) {
+    std::string basename = "/tmp/" + mlra_pipe_name;
     BaseSerDes::Kind SerDesType;
     if (data_format == "json") {
       SerDesType = BaseSerDes::Kind::Json;
@@ -2606,7 +2799,7 @@ void MLRA::inference() {
       // registerallocationinference::RegisterProfileList,
       // registerallocationinference::Data>>(mlra_server_address, this);
     } else if (enable_rl_inference_engine) {
-      errs() << "In RL inference engine\n";
+      LLVM_DEBUG(errs() << "In RL inference engine\n");
 #define nodeSelectionModelPath                                                 \
   MLConfig::mlconfig + "/regalloc/onnx-checkpoint/SELECT_NODE_MODEL_PATH.onnx"
 #define taskSelectionModelPath                                                 \
@@ -2630,7 +2823,7 @@ void MLRA::inference() {
       for (auto &rpi : regProfMap) {
         auto rp = rpi.second;
         if (rp.cls == "Phy" &&
-            rp.frwdInterferences.begin() == rp.frwdInterferences.end()) {
+            rp.interferences.begin() == rp.interferences.end()) {
           continue;
         } else {
           emptyGraph = false;
@@ -2923,7 +3116,7 @@ void MLRA::MLRegAlloc(MachineFunction &MF, SlotIndexes &Indexes,
                       MachineOptimizationRemarkEmitter &ORE) {
   assert(MLConfig::mlconfig != "" && "ml-config-path required");
   FunctionCounter++;
-  errs() << "In MLRegAlloc func...\n";
+  LLVM_DEBUG(errs() << "In MLRegAlloc func...\n");
   // reinitialize values for new function
   splitInvalidRegs.clear();
   regProfMap.clear();
@@ -3015,8 +3208,30 @@ void MLRA::MLRegAlloc(MachineFunction &MF, SlotIndexes &Indexes,
   avgLR = (float)totLR / numLR;
   avgInf = totInf / numLR;
 
-  if (enable_mlra_training) {
-    LLVM_DEBUG(errs() << "Here1\n");
+  if (enable_mlra_training && usePipe) {
+    LLVM_DEBUG(errs() << "Pipe Train\n"); 
+    std::string basename = "/tmp/" + mlra_pipe_name;
+    BaseSerDes::Kind SerDesType;
+    if (data_format == "json") {
+      SerDesType = BaseSerDes::Kind::Json;
+    } else if (data_format == "bytes") {
+      SerDesType = BaseSerDes::Kind::Bitstream;
+    } else if (data_format == "protobuf") {
+      SerDesType = BaseSerDes::Kind::Protobuf;
+    } else {
+      errs() << "Invalid data format\n";
+      return;
+    }
+    MLRunner = std::make_unique<PipeModelRunner>(basename + ".out",
+                                                 basename + ".in", SerDesType);
+    MLRunner->setResponse(&ServerModeRequest); // check
+    initPipeCommunicationTraining();
+  }
+
+  else if (enable_mlra_training) {
+    LLVM_DEBUG(errs() << "GRPC Train\n");
+    errs() << "GRPC Train\n";
+
     //????
     // RunService(this, mlra_server_address);
     // training_flow();
@@ -3026,6 +3241,7 @@ void MLRA::MLRegAlloc(MachineFunction &MF, SlotIndexes &Indexes,
         registerallocationinference::RegisterAllocationInference::Stub,
         registerallocationinference::RegisterProfileList,
         registerallocationinference::Data>>(mlra_server_address, this);
+
     training_flow();
   }
 

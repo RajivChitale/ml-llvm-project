@@ -35,6 +35,14 @@ MIR2Vec_Symbolic::MIR2Vec_Symbolic(std::string vocab) {
   IR2Vec::collectDataFromVocab(vocab, opcMap);
 }
 
+MIR2Vec_Symbolic::MIR2Vec_Symbolic(const std::map<std::string, IR2Vec::Vector> &vocabMap) {
+  WO = 1;
+  WA = 0.2;
+  fnVector = IR2Vec::Vector(DIM, 0);
+  res = "";
+  opcMap = vocabMap;
+}
+
 MIR2Vec_Symbolic::MIR2Vec_Symbolic(std::string vocab, unsigned WO, unsigned WA)
     : WO(WO), WA(WA) {
   fnVector = IR2Vec::Vector(DIM, 0);

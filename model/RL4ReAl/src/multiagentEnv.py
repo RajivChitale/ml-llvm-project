@@ -50,6 +50,8 @@ from config import BUILD_DIR
 from client import RegisterAllocationClient
 sys.path.append(f"{BUILD_DIR}/tools/MLCompilerBridge/Python-Utilities/")
 import RegisterAllocationInference_pb2, RegisterAllocation_pb2
+from compilerinterface import PipeCompilerInterface #, GrpcCompilerInterface
+
 
 config_path=None
 
@@ -108,9 +110,16 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
         self.best_allocation_cost = {}
         self.use_costbased_reward = env_config["use_costbased_reward"]
         self.iteration_number = 1
-        self.use_pipe = False
         self.curr_file_name = None
-
+        self.use_pipe = True # env_config["use_pipe"]
+        if self.use_pipe:
+            self.pipe_name = 'rl4realpipe' + str(self.worker_index)
+            self.data_format = "bytes" # env_config["data_format"] 
+            self.compiler_interface = PipeCompilerInterface(data_format= self.data_format, pipe_name = "/tmp/" + self.pipe_name)
+            # self.compiler_interface.reset_pipes()
+            print('Using Pipes with format', self.data_format)
+        self.use_grpc = not self.use_pipe
+        self.pipe_was_reset = False
         print("env_config.worker_index", env_config.worker_index)
         
         if self.mode != 'inference':
@@ -202,7 +211,7 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
         return self.getReward_Static(action)
 
     def reset(self, graph=None):
-            
+
         self.reset_env(graph)
         self.agent_count = 0
         self.select_node_agent_id = "select_node_agent_{}".format(self.agent_count)
@@ -799,7 +808,12 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
                 "__all__": True 
             }
             self.obs.next_stage = 'end'
-            self.stable_grpc('Exit', 0, 0)   
+            
+            if self.use_pipe:
+                self.compiler_interface.populate_buffer(encode_action({'action': 'Exit'}))
+                self.compiler_interface.evaluate(mode='exit')
+            elif self.use_grpc:
+                self.stable_grpc('Exit', 0, 0)   
             # os.killpg(os.getpgid(self.server_pid.pid), signal.SIGKILL)
             # if self.server_pid.poll() is not None:
             #   print('Force stop')
@@ -829,7 +843,24 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
         # print('try Split register {} on point {}'.format(node_id, split_point))
         
         if self.mode != 'inference':
-            updated_graphs = self.stable_grpc('Split', int(node_id), int(split_point))
+            if self.use_pipe:
+                encoded_data = encode_action({
+                    'action':'Split', 
+                    'regidx': int(node_id), 
+                    'payload': int(split_point)
+                })
+                # self.compiler_interface.reset_pipes()
+                self.compiler_interface.populate_buffer(encoded_data)
+                print('in split step')  # TEMP 
+                handshake = self.compiler_interface.evaluate()          # request
+                
+                self.compiler_interface.populate_buffer(0)
+                updated_graphs_serial = self.compiler_interface.evaluate()     # response
+                updated_graphs = self.parseObservation(updated_graphs_serial)
+            elif self.use_grpc:
+                updated_graphs = self.stable_grpc('Split', int(node_id), int(split_point))
+            
+            # print('updated_graphs', updated_graphs)                # debug
             if updated_graphs is None:
                 self.obs.graph_topology.markNodeAsNotVisited(nodeChoosen)
                 return reward, False
@@ -890,7 +921,23 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
             done = True
             self.obs.next_stage = 'end'
             if self.mode != 'inference':
-                exit_response = self.stable_grpc('Exit', 0, 0)
+                if self.use_pipe:
+                    encoded_data = encode_action({
+                        'action': 'Color', 'color': self.colormap
+                    })
+                    self.compiler_interface.populate_buffer(encoded_data) 
+                    print('in color step')  # TEMP
+                    handshake = self.compiler_interface.evaluate()                      # request
+                    print('handshake', handshake)
+                    
+                    self.compiler_interface.populate_buffer(0)
+                    exit_response = self.compiler_interface.evaluate()
+                    exit_response = self.parseObservation(exit_response)
+                    print('exit_response', exit_response)
+                elif self.use_grpc:
+                    exit_response = self.stable_grpc('Exit', 0, 0)
+
+                # inter_graphs = self.parseObservation(data) #?
                 self.stopServer()
                 current_cost = SPILL_COST_THRESHOLD
                 if exit_response:
@@ -1095,23 +1142,35 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
             self.fun_id = graph['graph'][1][1]['Function_ID']
             self.num_nodes = len(self.graph['nodes'])
             self.obs = get_observations(self.graph)
-            if self.server_pid is not None:
-                print('terminate the pid if alive : {}'.format(self.server_pid.pid))
-                self.stopServer()
-                # os.killpg(os.getpgid(self.server_pid.pid), signal.SIGKILL)
-            hostip = "0.0.0.0"
-            hostport = str(int(self.env_config['Workers_starting_port']) + self.worker_index)
-            ipadd = "{}:{}".format(hostip, hostport)
+            
+            if self.use_grpc:
+                if self.server_pid is not None:
+                    print('terminate the pid if alive : {}'.format(self.server_pid.pid))
+                    self.stopServer()
+                    # os.killpg(os.getpgid(self.server_pid.pid), signal.SIGKILL)
+                hostip = "0.0.0.0"
+                hostport = str(int(self.env_config['Workers_starting_port']) + self.worker_index)
+                ipadd = "{}:{}".format(hostip, hostport)
+                
             build_path = self.env_config["build_path"]
             if self.env_config["target"] == 'X86':
                 cflags = self.env_config["X86_CFLAGS"]
             else:
                 cflags = self.env_config["AArch64_CFLAGS"]
             logdir = self.env_config["log_dir"]
-            self.server_pid = utils_1.startServer(self.fileName, self.functionName, self.fun_id, ipadd, build_path, cflags, logdir, self.worker_index, self.use_mca_reward)
-            self.queryllvm = RegisterAllocationClient(hostport=hostport)
+            
+            if self.use_grpc:
+                self.server_pid = utils_1.startServer(self.fileName, self.functionName, self.fun_id, build_path, cflags, logdir, self.worker_index, self.use_mca_reward, ip=ipadd, use_grpc=True)
+                self.queryllvm = RegisterAllocationClient(hostport=hostport)
+            elif self.use_pipe:
+                self.server_pid = utils_1.startServer(self.fileName, self.functionName, self.fun_id, build_path, cflags, logdir, self.worker_index, self.use_mca_reward, pipe_name = self.pipe_name, data_format= self.data_format, use_pipe=True)
+                
+                if self.pipe_was_reset is False:
+                    self.pipe_was_reset = True
+                    self.compiler_interface.reset_pipes()   # TODO - check
+         
             self.color_assignment_map = []
-            assert not bool(self.color_assignment_map), "Colour assignment map is non empty"
+            assert not bool(self.color_assignment_map), "Colour assignment map is non empty"            
         else:
             self.fileName = graph.fileName
             self.functionName = graph.funcName
@@ -1241,6 +1300,7 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
 
                     for neigh in node_prof.interferences:
                         try:
+                            # TODO - check need for reverse
                             if self.mode != 'inference':
                                 if str(neigh) in self.obs.nid_idx:
                                     self.obs.graph_topology.adjList[self.obs.nid_idx[str(neigh)]].append(self.obs.nid_idx[str(nodeId)])
@@ -1288,12 +1348,14 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
             logging.debug('update the interfering node data.')
             adjList_helper = [[] for _ in range(self.obs.graph_topology.num_nodes)]
             for node_prof in updated_graphs.regProf:
+                # TODO - check need for reverse
                 if self.mode != 'inference':
                     nodeId = str(node_prof.regID)
                 else:
                     nodeId = node_prof.regID
                 interfering_node_idx = self.obs.nid_idx[nodeId]
                 try:
+                    # TODO - check need for reverse
                     if self.mode != 'inference':
                         # self.obs.graph_topology.adjList[interfering_node_idx] = list(map(lambda x: self.obs.nid_idx[str(x)], node_prof.interferences))
                         self.obs.graph_topology.adjList[interfering_node_idx] = list(set(self.obs.graph_topology.adjList[interfering_node_idx] + list(map(lambda x: self.obs.nid_idx[str(x)], node_prof.interferences))))
@@ -1372,3 +1434,121 @@ class HierarchicalGraphColorEnv(MultiAgentEnv):
             self.server_pid.kill()
             out, errs = self.server_pid.communicate()
             print("Force Stop")
+            
+
+    def parseObservation(self, obs):
+        inter_graphs = {
+            "regProf": [],
+            "new": False,
+            "result": False,
+            "fileName": "test",
+            "funcName": "test",
+            "funid": 0,
+        }
+        if self.data_format == "bytes":
+            print('parsing bytes')
+            curr = None
+            for tv in obs:
+                spec_name = tv.spec().name.split("_")[0]
+                if spec_name == "regID":
+                    if curr is not None:
+                        inter_graphs["regProf"].append(curr)
+                        # print(curr)
+                        # break
+                    curr = {
+                        "regID": None,  # int
+                        "interferences": None,  # int list
+                        "splitSlots": None,  # int list
+                        "useDistances": None,  # int list
+                        "spillWeight": None,  # float
+                        "positionalSpillWeights": None,  # float list
+                    }
+                    curr["regID"] = tv[0]
+                    print("regID: ", curr["regID"])
+                elif spec_name == "interferences":
+                    curr["interferences"] = [int(v) for v in tv]
+                elif spec_name == "splitSlots":
+                    curr["splitSlots"] = [int(v) for v in tv]
+                elif spec_name == "useDistances":
+                    curr["useDistances"] = [int(v) for v in tv]
+                elif spec_name == "spillWeight":
+                    curr["spillWeight"] = tv[0]
+                elif spec_name == "positionalSpillWeights":
+                    curr["positionalSpillWeights"] = [float(v) for v in tv]
+                elif spec_name == "result" or spec_name == "cost":
+                    inter_graphs[spec_name] = tv[0]
+            if curr is not None:
+                inter_graphs["regProf"].append(curr)
+
+        elif self.data_format == "json":
+            features_dict = dict()
+            for k1, v in obs.items():
+                if k1 == "cost" or k1 == "result":
+                    inter_graphs[k1] = v
+                    continue
+                k, reg_id = k1.split("_")
+                if reg_id not in features_dict.keys():
+                    features_dict[reg_id] = {
+                        "regID": reg_id,  # int
+                        "interferences": None,  # int list
+                        "splitSlots": None,  # int list
+                        "useDistances": None,  # int list
+                        "spillWeight": None,  # float
+                        "positionalSpillWeights": None,  # float list
+                        # "vectors": None,
+                    }
+                features_dict[reg_id][k] = v
+            for reg_id, features in features_dict.items():
+                curr = features
+                inter_graphs["regProf"].append(curr)
+
+        elif self.data_format == "protobuf":
+            pass
+        
+        list.sort(inter_graphs["regProf"], key=lambda x: x["regID"])
+        # sorted(inter_graphs["regProf"], key=lambda x: x["regID"])
+        
+        inter_graphs = NestedDict(inter_graphs)
+        return inter_graphs
+
+
+def encode_action(data):
+    msg = []
+    if data["action"] == "Split":
+        msg.append(0)
+        msg.append(data["regidx"])
+        msg.append(data["payload"])
+    elif data["action"] == "Color":
+        msg.append(1)
+        for x in data["color"]:
+            for k, v in x.items():
+                msg.append(int(k))
+                msg.append(int(v))
+    elif data["action"] == "Exit":
+        msg.append(-1)
+    msg = [int(x) for x in msg]
+    return msg
+
+
+class NestedDict:
+    def __init__(self, data):
+        for key, value in data.items():
+            if isinstance(value, dict):
+                setattr(self, key, NestedDict(value))
+            elif isinstance(value, list):
+                setattr(
+                    self,
+                    key,
+                    [
+                        NestedDict(item) if isinstance(item, dict) else item
+                        for item in value
+                    ],
+                )
+            else:
+                setattr(self, key, value)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __contains__(self, key):
+        return hasattr(self, key)

@@ -39,6 +39,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--train-iterations", type=int, default=100000)
 parser.add_argument("--workers", type=int, default=1,required=True)
 parser.add_argument("--mode", type=str, default="CPU")
+parser.add_argument("--data_format", type=str, default="bytes")
+parser.add_argument("--use_pipe", type=bool, default=False, help="Use pipe communication")
 parser.add_argument("--dump_onnx_model", type=bool, default=False, help="Dump onnx model files or not")
 torch.autograd.set_detect_anomaly(True) 
 
@@ -153,12 +155,13 @@ if __name__ == "__main__":
 
     ray.init(object_store_memory=10000000000, local_mode=False)
     
-
     config["train-iterations"] = args.train_iterations
     config["framework"] = "torch"
     config["env"] = HierarchicalGraphColorEnv    
     config["callbacks"] = MyCallbacks
     config["dump_onnx_model"] = args.dump_onnx_model
+    # config["use_pipe"] = args.use_pipe
+    # config["data_format"] = args.data_format
 
     ModelCatalog.register_custom_model("select_node_model", SelectNodeNetwork)
     ModelCatalog.register_custom_model("select_task_model", SelectTaskNetwork)

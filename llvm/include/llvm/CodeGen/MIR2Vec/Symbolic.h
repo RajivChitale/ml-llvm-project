@@ -43,6 +43,7 @@ private:
 
 public:
   MIR2Vec_Symbolic(std::string vocab);
+  MIR2Vec_Symbolic(const std::map<std::string, IR2Vec::Vector> &vocabMap);
   MIR2Vec_Symbolic(std::string vocab, unsigned WO, unsigned WA);
 
   void generateSymbolicEncodings(llvm::MachineFunction &F,
